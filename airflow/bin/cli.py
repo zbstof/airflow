@@ -1494,40 +1494,47 @@ def list_users(args):
 
 @cli_utils.action_logging
 def generate_kubernetes_pod_yaml(args):
-    from airflow.executors.kubernetes_executor import AirflowKubernetesScheduler, KubeConfig
-    from airflow.kubernetes.pod_generator import PodGenerator
-    from airflow.kubernetes.worker_configuration import WorkerConfiguration
+    from airflow.contrib.executors.kubernetes_executor import AirflowKubernetesScheduler, KubeConfig, KubernetesExecutorConfig
+    from airflow.contrib.kubernetes.worker_configuration import WorkerConfiguration
+    from airflow.settings import pod_mutation_hook
+    from airflow.contrib.kubernetes.kubernetes_request_factory import \
+        pod_request_factory as pod_factory
+
+    kube_request_factory = pod_factory.SimplePodRequestFactory()
     execution_date = datetime.datetime(2020, 11, 3)
     dag = get_dag(args)
     yaml_output_path = args.output_path or "/tmp/airflow_generated_yaml/"
     kube_config = KubeConfig()
     for task in dag.tasks:
         ti = TaskInstance(task, execution_date)
-        pod = PodGenerator.construct_pod(
+        pod_id = AirflowKubernetesScheduler._create_pod_id(  # pylint: disable=W0212
+                args.dag_id, ti.task_id)
+        print("pod id " + str(pod_id))
+        worker_configuration = WorkerConfiguration(kube_config=kube_config)
+        pod = worker_configuration.make_pod(
             dag_id=args.dag_id,
             task_id=ti.task_id,
-            pod_id=AirflowKubernetesScheduler._create_pod_id(  # pylint: disable=W0212
-                args.dag_id, ti.task_id),
+            pod_id=pod_id,
             try_number=ti.try_number,
-            date=ti.execution_date,
-            command=ti.command_as_list(),
-            kube_executor_config=PodGenerator.from_obj(ti.executor_config),
+            airflow_command=ti.command_as_list(),
+            execution_date=execution_date,
+            kube_executor_config=KubernetesExecutorConfig.from_dict(ti.executor_config),
             worker_uuid="worker-config",
             namespace=kube_config.executor_namespace,
-            worker_config=WorkerConfiguration(kube_config=kube_config).as_pod()
         )
+        pod_mutation_hook(pod)
+        request = kube_request_factory.create(pod)
+
         import os
 
         import yaml
         from kubernetes.client.api_client import ApiClient
-        api_client = ApiClient()
         date_string = AirflowKubernetesScheduler._datetime_to_label_safe_datestring( # pylint: disable=W0212
             execution_date)
         yaml_file_name = f"{args.dag_id}_{ti.task_id}_{date_string}.yml"
         os.makedirs(os.path.dirname(yaml_output_path), exist_ok=True)
         with open(yaml_output_path + yaml_file_name, "w") as output:
-            sanitized_pod = api_client.sanitize_for_serialization(pod)
-            output.write(yaml.dump(sanitized_pod))
+            output.write(yaml.dump(request))
     print(f"YAML output can be found at {yaml_output_path}")
 
 @cli_utils.action_logging
