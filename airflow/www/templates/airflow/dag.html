@@ -406,7 +406,7 @@
       task_id = t;
       loc = String(window.location);
       $("#btn_filter").on("click", function(){
-        window.location = updateQueryStringParameter(loc, "root", task_id);
+        window.location = updateQueryStringParameter(loc, "root", "^" + task_id + "$");
       });
       subdag_id = sd;
       execution_date = d;
